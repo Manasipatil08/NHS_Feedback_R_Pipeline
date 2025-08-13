@@ -1,0 +1,844 @@
+---
+title: "NHS_Feedback_R-Pipeline"
+author: "Manasi Patil"
+date: "2025-08-02"
+output: html_document
+---
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(
+)
+```
+
+#Load Libraries
+```{r Libraries}
+# load dependencies
+library(ggraph)
+library(glmnet)
+library(here)
+library(igraph)
+library(textrecipes)
+library(tidymodels)
+library(tidytext)
+library(tidyverse)
+library(tm)
+library(topicmodels)
+library(wordcloud)
+library(viridis)
+library(stringr)
+library(parsnip)
+library(ranger)
+library(naivebayes)
+library(yardstick)
+library(pROC)
+library(caret)
+library(xgboost)
+library(pROC)
+library(ggplot2)
+library(discrim)
+library(tune)
+library(dplyr)
+library(shiny)
+set.seed(123)
+```
+
+```{r Load Data}
+
+feedback <- read_csv(file = here("data", "updated_feedback.csv"))
+```
+#Data Preprocessing and Cleaning
+
+```{r Data Preprocessing and Cleaning}
+
+# Clean the feedback text: Remove non-alphanumeric characters and tokenize
+cleaned_data <- feedback %>%
+  mutate(Feedback = str_replace_all(Feedback, "[^[:alnum:] ]", "")) %>% 
+  unnest_tokens(word, Feedback) %>%   # Tokenize text
+  anti_join(stop_words)               # Remove stopwords
+```
+
+#Exploratory Data Analyis
+```{r Exploratory Data Analysis}
+
+# Word Cloud
+wordcloud(words = cleaned_data$word, 
+          min.freq = 3, 
+          max.words = 150, 
+          random.order = FALSE, 
+          colors = viridis(100))
+```
+
+#Most Frequent Words
+```{r Word Cloud}
+# Word frequency distribution to identify the most common words
+# Count the frequency of each word
+word_freq <- cleaned_data %>%
+  count(word, sort = TRUE)
+
+# Plot the top 20 most frequent words
+ggplot(word_freq[1:20, ], aes(x = reorder(word, n), y = n)) +
+  geom_bar(stat = "identity", fill = "lightblue") +
+  coord_flip() +
+  labs(title = "Top 20 Most Frequent Words in Feedback", x = "Word", y = "Frequency")
+```
+
+#Bing Sentiment Lexicon
+```{r Bing}
+# Step 1: Join with the Bing sentiment lexicon  
+bing <- cleaned_data %>%
+  inner_join(get_sentiments("bing"), by = "word")
+
+bing_count <- bing %>%
+  count(sentiment, sort = TRUE)
+
+ggplot(bing_count, aes(x = sentiment, y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  labs(title = "Sentiment Counts from NHS Feedback",
+       x = "Sentiment", y = "Count") +
+  theme_minimal()
+
+
+# View top 20 positive words
+bing %>%
+  filter(sentiment == "positive") %>%
+  count(word, sort = TRUE) %>%
+  head(20)
+
+# View top 20 negative words
+bing %>%
+  filter(sentiment == "negative") %>%
+  count(word, sort = TRUE) %>%
+  head(20)
+
+```
+
+#NRC Sentiment Lexicon
+```{r NRC}
+# Count on sentiments for example sentiment ,negative,trust etc
+nrc <- cleaned_data %>%
+  inner_join(get_sentiments("nrc"), by = "word")
+
+# Count emotions
+nrc_count <- nrc %>%
+  count(sentiment, sort = TRUE)
+
+# Filter out only emotion categories 
+nrc_count %>%
+  filter(!sentiment %in% c("positive", "negative")) %>%
+  ggplot(aes(x = reorder(sentiment, n), y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "Emotion Distribution in Feedback (NRC)",
+       x = "Emotion", y = "Count") +
+  theme_minimal()
+```
+#Afinn Sentiment Lexicon
+```{r Afinn}
+afinn <- cleaned_data %>%
+  inner_join(get_sentiments("afinn"), by = "word")
+
+afinn_count <- afinn %>%
+  count(value, sort = TRUE)
+
+ggplot(afinn, aes(x = reorder(word, value), y = value, fill = value > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Sentiment Scores from AFINN (NHS Feedback Words)",
+    x = "Word",
+    y = "Sentiment Score"
+  ) +
+  scale_fill_manual(values = c("red", "steelblue")) +
+  theme_minimal()
+```
+```{r Do this}
+#Try to find between groups Yes and No and Male and Female
+```
+
+#Term Frequency
+```{r TF}
+term_freq <- cleaned_data %>%
+  count(word, sort = TRUE)
+
+wordcloud(words = term_freq$word, 
+          freq = term_freq$n, 
+          max.words = 100,
+          colors = brewer.pal(8, "Dark2"))
+```
+#Removing stop words manually
+```{r Removing Stop Words}
+cleaned_data <- cleaned_data %>%
+  filter(!word %in% c("ive", "im" ,"whats"))
+
+clean_term_freq <- cleaned_data %>% #after removing stop words
+  count(word, sort = TRUE)
+
+wordcloud(words = clean_term_freq$word, 
+          freq = term_freq$n, 
+          max.words = 100,
+          colors = brewer.pal(8, "Dark2"))
+
+# Top 20 most frequently occurring words
+
+ggplot(clean_term_freq %>% slice_max(n, n = 20) %>% arrange(n),
+       aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "pink") +
+  coord_flip() +
+  labs(
+    title = "Top 20 Most Frequent Words in NHS Feedback",
+    x = "Word",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+#Reconstructing the feedback
+```{r Reconstructing}
+# Remove non-alphanumeric characters
+new_feedback <- feedback %>%
+  mutate(Feedback = str_replace_all(Feedback, "[^[:alnum:] ]", "")) %>%  
+  mutate(Feedback = str_to_lower(Feedback)) %>%       # Optional: Convert to lowercase
+  mutate(Feedback = removeWords(Feedback, stopwords("en")))  # Remove stopwords
+
+#adding a column ID
+new_feedback <- new_feedback %>%
+  mutate(ID = row_number())
+
+# Define unwanted stop words
+unwanted_words <- c("ive", "im", "whats", "i","wont","theyve")
+
+# Create regex pattern for exact word match with word boundaries
+pattern <- paste0("\\b(", paste(unwanted_words, collapse = "|"), ")\\b")
+
+# Remove unwanted words
+feedback_cleaned <- new_feedback %>%
+  mutate(Feedback = str_replace_all(Feedback, pattern, "")) %>%
+  mutate(Feedback = str_squish(Feedback))  # Remove extra spaces
+```
+
+#TF-IDF
+```{r TF-IDF}
+
+cleaned_tokens <- feedback_cleaned %>%
+  unnest_tokens(word, Feedback) %>%           # Tokenize the Feedback column
+  anti_join(stop_words, by = "word")          # Remove standard stop words
+
+
+tfidf <- cleaned_tokens %>%
+  count(ID, word, sort = TRUE) %>%            # Count word frequency per document
+  bind_tf_idf(word, ID, n) %>%                # Compute tf-idf
+  arrange(desc(tf_idf))                       # Sort by highest tf-idf
+
+# tfidf %>%
+#   group_by(word) %>%
+#   slice_max(tf_idf, n = 1) %>%                # Take the highest tf-idf for each word
+#   ungroup() %>%
+#   slice_max(tf_idf, n = 20) %>%               # Select top 20 across all feedback
+#   ggplot(aes(x = reorder(word, tf_idf), y = tf_idf)) +
+#   geom_col(fill = "lightpink") +
+#   coord_flip() +
+#   labs(title = "Top 20 TF-IDF Words",
+#        x = "Word",
+#        y = "TF-IDF Score")
+
+tfidf %>%
+  group_by(word) %>%
+  slice_max(tf_idf, n = 1) %>%           # Top tf-idf per word
+  ungroup() %>%
+  slice_max(tf_idf, n = 20) %>%          # Top 20 words overall
+  ggplot(aes(x = reorder(word, tf_idf), y = tf_idf, fill = tf_idf)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_gradient(low = "#b3cde3", high = "#011f4b") +   # Muted blue gradient
+  labs(
+    title = "Top 20 TF-IDF Words",
+    x = "Words",
+    y = "TF-IDF Score"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 12)
+  )
+```
+#N-Grams
+```{r N-Grams(Bigram)}
+# Create bigrams
+bigrams <- feedback_cleaned %>%
+  unnest_tokens(bigram, Feedback, token = "ngrams", n = 2)
+
+# Remove stop words from bigrams
+clean_bigrams <- bigrams %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word) %>%
+  unite(bigram, word1, word2, sep = " ")
+
+# Count bigrams
+bigram_counts <- clean_bigrams %>%
+  count(bigram, sort = TRUE)
+
+# Top 20 bigrams plot
+bigram_counts %>%
+  slice_max(n, n = 20) %>%
+  ggplot(aes(x = reorder(bigram, n), y = n)) +
+  geom_col(fill = "pink") +
+  coord_flip() +
+  labs(title = "Top 20 Bigrams in NHS Feedback",
+       x = "Bigrams", y = "Frequency") +
+  theme_minimal(base_size = 14)
+
+# Create a graph object
+network_bigrams <- bigram_counts %>%
+  filter(n > 5) %>%  # Keep only frequently occurring bigrams
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  graph_from_data_frame()
+
+# Plot the network
+ggraph(network_bigrams, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE) +
+  geom_node_point(color = "orange", size = 4) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void() +
+  labs(title = "Bigram Network from NHS Feedback (frequently occurring bigrams)")
+```
+
+```{r}
+# # Create bigrams for feedback(Which is not cleaned properly)
+
+# bigrams <- feedback %>%
+#   unnest_tokens(bigram, Feedback, token = "ngrams", n = 2)
+# 
+# 
+# clean_bigrams <- bigrams %>%
+#   separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+#   filter(!word1 %in% stop_words$word,
+#          !word2 %in% stop_words$word) %>%
+#   unite(bigram, word1, word2, sep = " ")
+# 
+# # Count bigrams
+# bigram_counts <- clean_bigrams %>%
+#   count(bigram, sort = TRUE)
+# 
+# # Top 20 bigrams plot
+# bigram_counts %>%
+#   slice_max(n, n = 20) %>%
+#   ggplot(aes(x = reorder(bigram, n), y = n)) +
+#   geom_col(fill = "steelblue") +
+#   coord_flip() +
+#   labs(title = "Top 20 Bigrams in NHS Feedback",
+#        x = "Bigrams", y = "Frequency") +
+#   theme_minimal(base_size = 14)
+```
+#Trigrams
+```{r N-Grams(Trigrams) }
+
+#Try to do this
+```
+
+#Topic Modelling
+```{r Topic Modelling}
+# Count word frequency per document (ID)
+word_counts <- cleaned_tokens %>%
+  count(ID, word)
+
+# Create Document-Term Matrix
+dtm <- word_counts %>%
+  cast_dtm(document = ID, term = word, value = n)
+
+# LDA_model
+lda_model <- LDA(dtm, k = 5, control = list(seed = 123))
+
+lda_topics <- tidy(lda_model, matrix = "beta") # beta = term probabilities
+
+# Top 10 terms per topic
+top_terms <- lda_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup()
+
+# Plot
+top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered() +
+  labs(title = "Top Terms per Topic in NHS Feedback")
+
+document_topics <- tidy(lda_model, matrix = "gamma") # gamma = document-topic probabilities
+```
+#Assigning topic names for the topics
+```{r Topic Names}
+topic_names <- data.frame(
+  topic = 1:5,
+  topic_name = c(
+    "Routine & GP Concerns",
+    "Pain & Symptom",
+    "App & Technical Issues",
+    "Emotional Frustrations",
+    "Service Complaints & Prescriptions"
+  )
+)
+
+#Assign topic to each feedback
+# Get gamma (document-topic probabilities)
+document_topics <- tidy(lda_model, matrix = "gamma")
+
+# Assign highest probability topic to each document
+assigned_topics <- document_topics %>%
+  group_by(document) %>%
+  slice_max(gamma, n = 1) %>%
+  ungroup()
+
+# Add topic names
+# Convert to numeric
+assigned_topics <- assigned_topics %>%
+  mutate(document = as.integer(document))
+
+feedback_with_topics <- feedback_cleaned %>%
+  mutate(ID = row_number()) %>%
+  left_join(assigned_topics, by = c("ID" = "document"))
+```
+
+#Visualizing each feedback per topic
+```{r Visualization for topic}
+#Count feedback per topic
+topic_counts <- feedback_with_topics %>%
+  group_by(topic) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+# Bar Chart
+ggplot(topic_counts, aes(x = reorder(topic, count), y = count, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = count), hjust = -0.2, size = 5) +  # push further outside
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +  # add space on the right
+  labs(title = "Distribution of Topics in NHS Feedback (n = 350)",
+       x = "Topic", y = "Number of Feedbacks") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+# Pie-Chart
+# ggplot(topic_counts, aes(x = "", y = count, fill = topic)) +
+#   geom_bar(stat = "identity", width = 1) +
+#   coord_polar("y") +
+#   geom_text(aes(label = paste0(round(count / sum(count) * 100, 1), "%")),
+#             position = position_stack(vjust = 0.5), color = "white") +
+#   labs(title = "Proportion of Topics in NHS Feedback") +
+#   theme_void() +
+#   theme(plot.title = element_text(hjust = 0.5))
+
+```
+#Model Training
+```{r Model Training & Comparison}
+# Prepare Data
+model_data <- feedback_cleaned %>%
+  mutate(label = factor(case_when(
+    Clinical.Y.N == "Y" ~ "clinical",
+    Clinical.Y.N == "N" ~ "non_clinical"
+  ))) %>%
+  select(Feedback, label)
+
+# Train-test split
+data_split <- initial_split(model_data, prop = 0.8, strata = label)
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+```
+
+```{r Recipe}
+# Recipe (Text Pre-processing)
+text_recipe <- recipe(label ~ Feedback, data = train_data) %>%
+  step_tokenize(Feedback) %>%
+  step_stopwords(Feedback) %>%
+  step_tokenfilter(Feedback, max_tokens = 500) %>%  # keep top 500 tokens
+  step_tfidf(Feedback) %>%
+  step_normalize(all_predictors())
+```
+
+```{r Model Training}
+# Naive Bayes
+nb_model <- naive_Bayes() %>%
+  set_engine("naivebayes")
+
+# Logistic Regression
+log_model <- multinom_reg(penalty = 0) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+# Random Forest
+rf_model <- rand_forest(trees = 500) %>%
+  set_engine("ranger") %>%
+  set_mode("classification")
+
+# XGBoost
+xgb_model <- boost_tree(trees = 500, learn_rate = 0.05) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+```
+
+```{r Workflow}
+nb_wf  <- workflow() %>% add_recipe(text_recipe) %>% add_model(nb_model)
+log_wf <- workflow() %>% add_recipe(text_recipe) %>% add_model(log_model)
+rf_wf  <- workflow() %>% add_recipe(text_recipe) %>% add_model(rf_model)
+xgb_wf <- workflow() %>% add_recipe(text_recipe) %>% add_model(xgb_model)
+```
+
+```{r Model Fit}
+nb_fit  <- fit(nb_wf, data = train_data)
+log_fit <- fit(log_wf, data = train_data)
+rf_fit  <- fit(rf_wf, data = train_data)
+xgb_fit <- fit(xgb_wf, data = train_data)
+```
+
+```{r Confusion Matrix - Sample}
+# # Function to get predictions + metrics  (Without model names in output)
+# get_metrics <- function(model_fit, test_data) {
+#   preds <- predict(model_fit, test_data, type = "prob") %>%
+#     bind_cols(predict(model_fit, test_data)) %>%
+#     bind_cols(test_data %>% select(label))
+#   
+#   # Confusion matrix
+#   cm <- conf_mat(preds, truth = label, estimate = .pred_class)
+#   print(cm)
+#   
+#   # Metrics
+#   metrics <- preds %>%
+#     metrics(truth = label, estimate = .pred_class) %>%
+#     bind_rows(preds %>% f_meas(truth = label, estimate = .pred_class))
+#   
+#   list(preds = preds, metrics = metrics, cm = cm)
+# }
+# 
+# nb_res  <- get_metrics(nb_fit, test_data)
+# log_res <- get_metrics(log_fit, test_data)
+# rf_res  <- get_metrics(rf_fit, test_data)
+# xgb_res <- get_metrics(xgb_fit, test_data)
+```
+
+```{r Confusion Matrix}
+get_metrics <- function(model_fit, test_data, model_name) {
+  preds <- predict(model_fit, test_data, type = "prob") %>%
+    bind_cols(predict(model_fit, test_data)) %>%
+    bind_cols(test_data %>% select(label))
+  
+  # Confusion matrix
+  cm <- conf_mat(preds, truth = label, estimate = .pred_class)
+  
+  cat("\n--- Confusion Matrix for", model_name, "---\n")
+  print(cm)
+  
+  # Metrics
+  metrics <- preds %>%
+    metrics(truth = label, estimate = .pred_class) %>%
+    bind_rows(preds %>% f_meas(truth = label, estimate = .pred_class))
+  
+  list(preds = preds, metrics = metrics, cm = cm)
+}
+
+nb_res  <- get_metrics(nb_fit, test_data, "Naive Bayes")
+log_res <- get_metrics(log_fit, test_data, "Logistic Regression")
+rf_res  <- get_metrics(rf_fit, test_data, "Random Forest")
+xgb_res <- get_metrics(xgb_fit, test_data, "XGBoost")
+
+```
+
+```{r Confusion Matrix Visualization}
+# Function for a blue-shaded confusion matrix with white text
+plot_confusion_matrix <- function(cm, title) {
+  # Extract the data from the confusion matrix
+  cm_data <- as.data.frame(cm$table)
+  colnames(cm_data) <- c("Truth", "Prediction", "Freq")
+  
+  ggplot(cm_data, aes(x = Prediction, y = Truth, fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = Freq), color = "white", size = 6, fontface = "bold") +  # Add white counts
+    scale_fill_gradient(low = "#deebf7", high = "#08306b") +  # Blue shades
+    ggtitle(title) +
+    theme_minimal(base_size = 16) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      axis.title = element_text(size = 14),
+      axis.text = element_text(size = 12),
+      legend.position = "right"
+    )
+}
+# Apply to all models
+plot_confusion_matrix(nb_res$cm, "Naive Bayes Confusion Matrix")
+plot_confusion_matrix(log_res$cm, "Logistic Regression Confusion Matrix")
+plot_confusion_matrix(rf_res$cm, "Random Forest Confusion Matrix")
+plot_confusion_matrix(xgb_res$cm, "XGBoost Confusion Matrix")
+
+```
+
+```{r ROC Curve}
+# Function to compute ROC
+get_roc <- function(res, model_name) {
+  roc_curve(res$preds, truth = label, .pred_clinical) %>%
+    mutate(model = model_name)
+}
+
+# Combine ROC data
+roc_data <- bind_rows(
+  get_roc(nb_res, "Naive Bayes"),
+  get_roc(log_res, "Logistic Regression"),
+  get_roc(rf_res, "Random Forest"),
+  get_roc(xgb_res, "XGBoost")
+)
+
+# Colored ROC plot
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_path(size = 1.2) +
+  geom_abline(linetype = "dashed") +
+  labs(
+    title = "ROC Curves for All Models",
+    x = "1 - True Positive Rate",
+    y = "False Positive Rate",
+    color = "Model"
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+    "Naive Bayes" = "red",
+    "Logistic Regression" = "blue",
+    "Random Forest" = "green",
+    "XGBoost" = "purple"
+  ))
+
+```
+```{r ROC and AUC }
+library(yardstick)
+library(dplyr)
+library(ggplot2)
+
+# Function to compute ROC and AUC
+get_roc_auc <- function(res, model_name) {
+  roc_points <- roc_curve(res$preds, truth = label, .pred_clinical) %>%
+    mutate(model = model_name)
+  auc_value <- roc_auc(res$preds, truth = label, .pred_clinical) %>%
+    pull(.estimate)
+  list(roc = roc_points, auc = auc_value)
+}
+
+# Compute ROC + AUC for all models
+nb  <- get_roc_auc(nb_res,  "Naive Bayes")
+log <- get_roc_auc(log_res, "Logistic Regression")
+rf  <- get_roc_auc(rf_res,  "Random Forest")
+xgb <- get_roc_auc(xgb_res, "XGBoost")
+
+# Combine ROC points
+roc_data <- bind_rows(nb$roc, log$roc, rf$roc, xgb$roc)
+
+# Labels with AUC
+auc_labels <- c(
+  paste0("Naive Bayes (AUC=", round(nb$auc, 3), ")"),
+  paste0("Logistic Regression (AUC=", round(log$auc, 3), ")"),
+  paste0("Random Forest (AUC=", round(rf$auc, 3), ")"),
+  paste0("XGBoost (AUC=", round(xgb$auc, 3), ")")
+)
+
+# Replace model factor levels with labels that include AUC
+roc_data$model <- factor(
+  roc_data$model,
+  levels = c("Naive Bayes", "Logistic Regression", "Random Forest", "XGBoost"),
+  labels = auc_labels
+)
+
+# Create a named color vector (names must match the factor labels)
+cols <- setNames(c("red", "blue", "green", "purple"), auc_labels)
+
+# Plot
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_path(size = 1.2) +
+  geom_abline(linetype = "dashed") +
+  labs(
+    title = "ROC Curves with AUC for All Models",
+    x = "False Positive Rate",
+    y = "True Positive Rate",
+    color = "Model (AUC)"
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = cols)
+
+```
+
+```{r Calculate Matrix}
+# Use yardstick metrics only
+all_metrics_set <- yardstick::metric_set(
+  yardstick::accuracy, 
+  yardstick::precision, 
+  yardstick::recall, 
+  yardstick::f_meas
+)
+
+# Function to get predictions + metrics
+get_model_metrics <- function(model_fit, test_data, model_name) {
+  preds <- predict(model_fit, test_data, type = "prob") %>%
+    bind_cols(predict(model_fit, test_data)) %>%
+    bind_cols(test_data %>% select(label))
+  
+  metrics <- all_metrics_set(preds, truth = label, estimate = .pred_class) %>%
+    mutate(model = model_name)
+  
+  return(metrics)
+}
+
+# Get metrics for each model
+nb_metrics  <- get_model_metrics(nb_fit, test_data, "Naive Bayes")
+log_metrics <- get_model_metrics(log_fit, test_data, "Logistic Regression")
+rf_metrics  <- get_model_metrics(rf_fit, test_data, "Random Forest")
+xgb_metrics <- get_model_metrics(xgb_fit, test_data, "XGBoost")
+
+# Combine all metrics into one table
+all_metrics <- bind_rows(nb_metrics, log_metrics, rf_metrics, xgb_metrics)
+
+# View results
+print(all_metrics)
+
+```
+
+```{r Saving the XGBoost model}
+#Saving the model for Shiny interface as XG boost is best model compare to others
+saveRDS(xgb_fit, "data/xgboost_model.rds")
+```
+
+#Shiny App 1
+```{r Shiny Application Code}
+# # app1.R
+# # Load trained model
+# model <- readRDS("data/xgboost_model.rds")
+# 
+# # UI
+# ui <- fluidPage(
+#   titlePanel("NHS Feedback Classifier"),
+#   tags$style(HTML("
+#     body { background-color: #f8f9fa; }
+#     .title { color: #2c3e50; text-align: center; font-weight: bold; }
+#     .result-box { font-size: 20px; font-weight: bold; padding: 10px; border-radius: 8px; margin-top: 15px; }
+#   ")),
+#   sidebarLayout(
+#     sidebarPanel(
+#       textAreaInput("feedback", "Enter Feedback:", "", width = "100%", height = "150px"),
+#       actionButton("predict", "Predict", class = "btn btn-primary btn-lg"),
+#       br(),
+#       br(),
+#       uiOutput("prediction_output")
+#     ),
+#     mainPanel(
+#       h3("Instructions"),
+#       p("Enter patient feedback into the text box and click Predict. 
+#         The model will classify whether the feedback requires clinical review or not."),
+#       hr(),
+#       h4("Model Info"),
+#       p("This app uses a XGBoost model trained on NHS feedback data.")
+#     )
+#   )
+# )
+# 
+# # Server
+# server <- function(input, output, session) {
+#   observeEvent(input$predict, {
+#     req(input$feedback)
+#     
+#     # Create a data frame for prediction
+#     new_data <- tibble(Feedback = input$feedback)
+#     
+#     # Predict
+#     prediction <- predict(model, new_data, type = "prob") %>%
+#       bind_cols(predict(model, new_data))
+#     
+#     pred_class <- prediction$.pred_class
+#     confidence <- round(max(prediction$.pred_clinical, prediction$.pred_non_clinical) * 100, 2)
+#     
+#     # Render result
+#     output$prediction_output <- renderUI({
+#       color <- ifelse(pred_class == "clinical", "#e74c3c", "#2ecc71")
+#       HTML(paste0("<div class='result-box' style='background-color:", color, "; color:white;'>Prediction: ", 
+#                   pred_class, " (Confidence: ", confidence, "%)</div>"))
+#     })
+#   })
+# }
+# 
+# # Run App
+# shinyApp(ui = ui, server = server)
+```
+
+#Shiny App 2
+```{r Run App 2}
+#app2.R
+# Load trained model
+model <- readRDS("data/xgboost_model.rds")
+
+# UI
+ui <- fluidPage(
+  tags$head(
+    tags$style(HTML("
+      body {
+        background-image: url('images.png');
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+        background-position: center;
+        color: #2c3e50;
+      }
+      .overlay {
+        background-color: rgba(255, 255, 255, 0.8); 
+        padding: 30px;
+        border-radius: 10px;
+        max-width: 800px;
+        margin: 50px auto;
+      }
+      .title-text { color: #005EB8; font-size: 32px; font-weight: bold; margin-top: 10px; text-align: center; }
+      .sub-title { color: #B03060; font-size: 18px; text-align: center; }
+      .result-box { font-size: 22px; font-weight: bold; padding: 15px; border-radius: 8px; margin-top: 20px; text-align: center; }
+      #predict { width: 200px; height: 50px; font-size: 18px; }
+      #feedback { font-size: 16px; }
+    "))
+  ),
+  
+  # Overlay to make text readable on background
+  div(class = "overlay",
+      div(class = "title-text", "NHS Feedback Classifier"),
+      div(class = "sub-title", "Powered by Sheffield Hallam University"),
+      textAreaInput("feedback", "Enter Patient Feedback:", "", width = "100%", height = "150px"),
+      br(),
+      actionButton("predict", "Predict", class = "btn btn-primary btn-lg"),
+      uiOutput("prediction_output"),
+      hr(),
+      h4("How it Works"),
+      p("Enter patient feedback and click Predict. The model will classify whether it requires clinical review."),
+      h3("About the Model"),
+      p("This application uses a tuned XGBoost model trained on NHS patient feedback.")
+  )
+)
+
+# Server
+server <- function(input, output, session) {
+  observeEvent(input$predict, {
+    req(input$feedback)
+    
+    # Create a data frame for prediction
+    new_data <- tibble(Feedback = input$feedback)
+    
+    # Predict
+    prediction <- predict(model, new_data, type = "prob") %>%
+      bind_cols(predict(model, new_data))
+    
+    pred_class <- prediction$.pred_class
+    confidence <- round(max(prediction$.pred_clinical, prediction$.pred_non_clinical) * 100, 2)
+    
+    # Render result
+    output$prediction_output <- renderUI({
+      color <- ifelse(pred_class == "clinical", "#e74c3c", "#2ecc71")
+      HTML(paste0("<div class='result-box' style='background-color:", color, "; color:white;'>Prediction: ", 
+                  pred_class, " (Confidence: ", confidence, "%)</div>"))
+    })
+  })
+}
+
+# Run App
+shinyApp(ui = ui, server = server)
+```
+
+
+
