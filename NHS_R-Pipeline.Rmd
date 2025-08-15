@@ -45,8 +45,32 @@ set.seed(123)
 
 feedback <- read_csv(file = here("data", "updated_feedback.csv"))
 ```
-#Data Preprocessing and Cleaning
+```{r Sample EDA}
+# Count missing values in Feedback
+sum(is.na(feedback$Feedback))
 
+# Count unique values in Feedback
+length(unique(feedback$Feedback))
+
+# Summary of missing & unique together
+data.frame(
+  Missing_Count = sum(is.na(feedback$Feedback)),
+  Unique_Count  = length(unique(feedback$Feedback))
+)
+# Unnest tokens and count words
+word_counts <- feedback %>%
+  unnest_tokens(word, Feedback) %>%
+  count(word, sort = TRUE)
+
+# Word Cloud
+wordcloud(words = word_counts$word,
+          freq = word_counts$n,   # Make sure you pass frequency values
+          min.freq = 3,
+          max.words = 150,
+          random.order = FALSE,
+          colors = viridis(200))
+```
+#Data Preprocessing and Cleaning
 ```{r Data Preprocessing and Cleaning}
 
 # Clean the feedback text: Remove non-alphanumeric characters and tokenize
@@ -58,13 +82,12 @@ cleaned_data <- feedback %>%
 
 #Exploratory Data Analyis
 ```{r Exploratory Data Analysis}
-
 # Word Cloud
 wordcloud(words = cleaned_data$word, 
           min.freq = 3, 
           max.words = 150, 
           random.order = FALSE, 
-          colors = viridis(100))
+          colors = viridis(200))
 ```
 
 #Most Frequent Words
@@ -143,17 +166,25 @@ ggplot(afinn, aes(x = reorder(word, value), y = value, fill = value > 0)) +
   geom_col(show.legend = FALSE) +
   coord_flip() +
   labs(
-    title = "Sentiment Scores from AFINN (NHS Feedback Words)",
+    title = " AFINN (Total sentiment contribution per word across the corpus)",
     x = "Word",
     y = "Sentiment Score"
   ) +
   scale_fill_manual(values = c("red", "steelblue")) +
   theme_minimal()
-```
-```{r Do this}
-#Try to find between groups Yes and No and Male and Female
-```
 
+unique_scores <- afinn %>%
+  distinct(word, value)  # keep one row per word
+
+ggplot(unique_scores, aes(x = reorder(word, value), y = value, fill = value > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "AFINN Lexicon Scores per Word",
+       x = "Word",
+       y = "AFINN Score (-5 to +5)") +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick"))
+
+```
 #Term Frequency
 ```{r TF}
 term_freq <- cleaned_data %>%
@@ -190,6 +221,94 @@ ggplot(clean_term_freq %>% slice_max(n, n = 20) %>% arrange(n),
   ) +
   theme_minimal()
 ```
+```{r}
+#Compare word frequency, sentiment, and topic distribution between Clinical.Y.N ("Yes" vs. "No") and Gender ("Male" vs. "Female") groups.
+
+# Word Frequency by Clinical.Y.N
+word_freq_by_clinical <- cleaned_data %>%
+  count(Clinical.Y.N, word, sort = TRUE) %>%
+  group_by(Clinical.Y.N) %>%
+  mutate(proportion = n / sum(n)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = Clinical.Y.N, values_from = proportion, values_fill = 0) %>%
+  mutate(diff = Y - N) %>%
+  arrange(desc(abs(diff)))
+
+# Plot top 10 words with largest frequency differences
+word_freq_by_clinical %>%
+  slice_head(n = 10) %>%
+  ggplot(aes(x = reorder(word, diff), y = diff, fill = diff > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Words with Largest Frequency Differences: Clinical vs. Non-Clinical",
+    x = "Word",
+    y = "Difference in Proportion (Yes - No)"
+  ) +
+  scale_fill_manual(values = c("red", "blue")) +
+  theme_minimal()
+
+# Sentiment by Clinical.Y.N (Bing)
+bing_by_clinical <- cleaned_data %>%
+  inner_join(get_sentiments("bing"), by = "word") %>%
+  count(Clinical.Y.N, sentiment) %>%
+  group_by(Clinical.Y.N) %>%
+  mutate(proportion = n / sum(n)) %>%
+  ungroup()
+
+ggplot(bing_by_clinical, aes(x = Clinical.Y.N, y = proportion, fill = sentiment)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Sentiment Distribution by Clinical vs. Non-Clinical Feedback",
+    x = "Clinical Status",
+    y = "Proportion"
+  ) +
+  scale_fill_manual(values = c("negative" = "red", "positive" = "blue")) +
+  theme_minimal()
+
+# Word Frequency by Gender (if available)
+if ("Gender" %in% colnames(feedback)) {
+  word_freq_by_gender <- cleaned_data %>%
+    count(Gender, word, sort = TRUE) %>%
+    group_by(Gender) %>%
+    mutate(proportion = n / sum(n)) %>%
+    ungroup() %>%
+    pivot_wider(names_from = Gender, values_from = proportion, values_fill = 0) %>%
+    mutate(diff = M - F) %>%
+    arrange(desc(abs(diff)))
+
+  word_freq_by_gender %>%
+    slice_head(n = 10) %>%
+    ggplot(aes(x = reorder(word, diff), y = diff, fill = diff > 0)) +
+    geom_col(show.legend = FALSE) +
+    coord_flip() +
+    labs(
+      title = "Words with Largest Frequency Differences: Male vs. Female",
+      x = "Word",
+      y = "Difference in Proportion (Male - Female)"
+    ) +
+    scale_fill_manual(values = c("red", "blue")) +
+    theme_minimal()
+
+  # Sentiment by Gender (Bing)
+  bing_by_gender <- cleaned_data %>%
+    inner_join(get_sentiments("bing"), by = "word") %>%
+    count(Gender, sentiment) %>%
+    group_by(Gender) %>%
+    mutate(proportion = n / sum(n)) %>%
+    ungroup()
+
+  ggplot(bing_by_gender, aes(x = Gender, y = proportion, fill = sentiment)) +
+    geom_col(position = "dodge") +
+    labs(
+      title = "Sentiment Distribution by Gender",
+      x = "Gender",
+      y = "Proportion"
+    ) +
+    scale_fill_manual(values = c("negative" = "red", "positive" = "blue")) +
+    theme_minimal()
+}
+```
 #Reconstructing the feedback
 ```{r Reconstructing}
 # Remove non-alphanumeric characters
@@ -212,6 +331,9 @@ pattern <- paste0("\\b(", paste(unwanted_words, collapse = "|"), ")\\b")
 feedback_cleaned <- new_feedback %>%
   mutate(Feedback = str_replace_all(Feedback, pattern, "")) %>%
   mutate(Feedback = str_squish(Feedback))  # Remove extra spaces
+
+write_csv(feedback_cleaned, here("data", "feedback_cleaned.csv"))
+
 ```
 
 #TF-IDF
@@ -220,7 +342,6 @@ feedback_cleaned <- new_feedback %>%
 cleaned_tokens <- feedback_cleaned %>%
   unnest_tokens(word, Feedback) %>%           # Tokenize the Feedback column
   anti_join(stop_words, by = "word")          # Remove standard stop words
-
 
 tfidf <- cleaned_tokens %>%
   count(ID, word, sort = TRUE) %>%            # Count word frequency per document
@@ -301,40 +422,33 @@ ggraph(network_bigrams, layout = "fr") +
   theme_void() +
   labs(title = "Bigram Network from NHS Feedback (frequently occurring bigrams)")
 ```
-
-```{r}
-# # Create bigrams for feedback(Which is not cleaned properly)
-
-# bigrams <- feedback %>%
-#   unnest_tokens(bigram, Feedback, token = "ngrams", n = 2)
-# 
-# 
-# clean_bigrams <- bigrams %>%
-#   separate(bigram, into = c("word1", "word2"), sep = " ") %>%
-#   filter(!word1 %in% stop_words$word,
-#          !word2 %in% stop_words$word) %>%
-#   unite(bigram, word1, word2, sep = " ")
-# 
-# # Count bigrams
-# bigram_counts <- clean_bigrams %>%
-#   count(bigram, sort = TRUE)
-# 
-# # Top 20 bigrams plot
-# bigram_counts %>%
-#   slice_max(n, n = 20) %>%
-#   ggplot(aes(x = reorder(bigram, n), y = n)) +
-#   geom_col(fill = "steelblue") +
-#   coord_flip() +
-#   labs(title = "Top 20 Bigrams in NHS Feedback",
-#        x = "Bigrams", y = "Frequency") +
-#   theme_minimal(base_size = 14)
-```
 #Trigrams
-```{r N-Grams(Trigrams) }
+```{r N-Grams(Trigrams)}
+trigrams <- feedback_cleaned %>%
+  unnest_tokens(trigram, Feedback, token = "ngrams", n = 3)
 
-#Try to do this
+clean_trigrams <- trigrams %>%
+  separate(trigram, into = c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word) %>%
+  unite(trigram, word1, word2, word3, sep = " ")
+
+trigram_counts <- clean_trigrams %>%
+  count(trigram, sort = TRUE)
+
+trigram_counts %>%
+  slice_max(n, n = 20) %>%
+  ggplot(aes(x = reorder(trigram, n), y = n)) +
+  geom_col(fill = "lightblue") +
+  coord_flip() +
+  labs(
+    title = "Top 20 Trigrams in NHS Feedback",
+    x = "Trigrams",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 14)
 ```
-
 #Topic Modelling
 ```{r Topic Modelling}
 # Count word frequency per document (ID)
@@ -367,59 +481,57 @@ top_terms %>%
 
 document_topics <- tidy(lda_model, matrix = "gamma") # gamma = document-topic probabilities
 ```
+
 #Assigning topic names for the topics
 ```{r Topic Names}
-topic_names <- data.frame(
-  topic = 1:5,
-  topic_name = c(
-    "Routine & GP Concerns",
-    "Pain & Symptom",
-    "App & Technical Issues",
-    "Emotional Frustrations",
-    "Service Complaints & Prescriptions"
-  )
-)
-
-#Assign topic to each feedback
-# Get gamma (document-topic probabilities)
-document_topics <- tidy(lda_model, matrix = "gamma")
-
-# Assign highest probability topic to each document
-assigned_topics <- document_topics %>%
-  group_by(document) %>%
-  slice_max(gamma, n = 1) %>%
-  ungroup()
-
-# Add topic names
-# Convert to numeric
-assigned_topics <- assigned_topics %>%
-  mutate(document = as.integer(document))
-
-feedback_with_topics <- feedback_cleaned %>%
-  mutate(ID = row_number()) %>%
-  left_join(assigned_topics, by = c("ID" = "document"))
+# topic_names <- data.frame(
+#   topic = 1:5,
+#   topic_name = c(
+#     "Routine & Concerns",
+#     "Pain & Symptom",
+#     "App & Technical Issues",
+#     "Emotional Frustrations & Pain",
+#     " NHS App Service Complaints & Prescriptions"
+#   )
+# )
+# #Assign topic to each feedback
+# document_topics <- tidy(lda_model, matrix = "gamma")
+# 
+# # Assign highest probability topic to each document
+# assigned_topics <- document_topics %>%
+#   group_by(document) %>%
+#   slice_max(gamma, n = 1) %>%
+#   ungroup()
+# 
+# # Add topic names
+# # Convert to numeric
+# assigned_topics <- assigned_topics %>%
+#   mutate(document = as.integer(document))
+# 
+# feedback_with_topics <- feedback_cleaned %>%
+#   mutate(ID = row_number()) %>%
+#   left_join(assigned_topics, by = c("ID" = "document"))
 ```
 
-#Visualizing each feedback per topic
-```{r Visualization for topic}
+
+```{r Visualization for topic, warning=FALSE}
 #Count feedback per topic
-topic_counts <- feedback_with_topics %>%
-  group_by(topic) %>%
-  summarise(count = n()) %>%
-  arrange(desc(count))
-
-# Bar Chart
-ggplot(topic_counts, aes(x = reorder(topic, count), y = count, fill = topic)) +
-  geom_col(show.legend = FALSE) +
-  geom_text(aes(label = count), hjust = -0.2, size = 5) +  # push further outside
-  coord_flip() +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +  # add space on the right
-  labs(title = "Distribution of Topics in NHS Feedback (n = 350)",
-       x = "Topic", y = "Number of Feedbacks") +
-  theme_minimal(base_size = 14) +
-  theme(plot.title = element_text(hjust = 0.5))
-
-
+# topic_counts <- feedback_with_topics %>%
+#   group_by(topic) %>%
+#   summarise(count = n()) %>%
+#   arrange(desc(count))
+# 
+# # Bar Chart
+# ggplot(topic_counts, aes(x = reorder(topic, count), y = count, fill = topic)) +
+#   geom_col(show.legend = FALSE) +
+#   geom_text(aes(label = count), hjust = -0.2, size = 5) +  # push further outside
+#   coord_flip() +
+#   scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +  # add space on the right
+#   labs(title = "Distribution of Topics in NHS Feedback (n = 350)",
+#        x = "Topic", y = "Number of Feedbacks") +
+#   theme_minimal(base_size = 14) +
+#   theme(plot.title = element_text(hjust = 0.5))
+# 
 # Pie-Chart
 # ggplot(topic_counts, aes(x = "", y = count, fill = topic)) +
 #   geom_bar(stat = "identity", width = 1) +
@@ -428,7 +540,83 @@ ggplot(topic_counts, aes(x = reorder(topic, count), y = count, fill = topic)) +
 #             position = position_stack(vjust = 0.5), color = "white") +
 #   labs(title = "Proportion of Topics in NHS Feedback") +
 #   theme_void() +
-#   theme(plot.title = element_text(hjust = 0.5))
+#    theme(plot.title = element_text(hjust = 0.5))
+```
+
+#Visualizing
+```{r Visualization for topic}
+# #System: descriptive names to topics and join with feedback data.
+
+topic_names <- data.frame(
+  topic = 1:5,
+  topic_name = c(
+    "Routine & GP Concerns",
+    "Pain & Symptom",
+    "App & Technical Issues",
+    "Frustrations & Pain",
+    "Service Complaints & Prescriptions"
+  )
+)
+
+assigned_topics <- document_topics %>%
+  group_by(document) %>%
+  slice_max(gamma, n = 1) %>%
+  ungroup() %>%
+  mutate(document = as.integer(document))
+
+feedback_with_topics <- feedback_cleaned %>%
+  left_join(assigned_topics, by = c("ID" = "document")) %>%
+  left_join(topic_names, by = "topic")
+
+#Visualizing Topic Distribution
+#Visualize topic distribution overall and by group.
+topic_counts <- feedback_with_topics %>%
+   group_by(topic_name) %>%
+   summarise(count = n()) %>%
+   arrange(desc(count))
+
+ ggplot(topic_counts, aes(x = reorder(topic_name, count), y = count, fill = topic_name)) +
+   geom_col(show.legend = FALSE) +
+   geom_text(aes(label = count), hjust = -0.2, size = 5) +
+   coord_flip() +
+   scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+   labs(title = "Distribution of Topics in NHS Feedback (n = 350)",
+        x = "Topic", y = "Number of Feedbacks") +
+   theme_minimal(base_size = 14)
+
+ # Topic Distribution by Clinical.Y.N
+ topic_counts_by_clinical <- feedback_with_topics %>%
+   group_by(Clinical.Y.N, topic_name) %>%
+   summarise(count = n()) %>%
+   mutate(proportion = count / sum(count))
+
+ ggplot(topic_counts_by_clinical, aes(x = Clinical.Y.N, y = proportion, fill = topic_name)) +
+   geom_col(position = "dodge") +
+   labs(
+     title = "Topic Distribution by Clinical vs. Non-Clinical Feedback",
+     x = "Clinical Status",
+     y = "Proportion",
+     fill = "Topic"
+   ) +
+   theme_minimal()
+
+# # Topic Distribution by Gender (if available)
+ if ("Gender" %in% colnames(feedback)) {
+   topic_counts_by_gender <- feedback_with_topics %>%
+     group_by(Gender, topic_name) %>%
+     summarise(count = n()) %>%
+     mutate(proportion = count / sum(count))
+
+   ggplot(topic_counts_by_gender, aes(x = Gender, y = proportion, fill = topic_name)) +
+     geom_col(position = "dodge") +
+     labs(
+       title = "Topic Distribution by Gender",
+       x = "Gender",
+       y = "Proportion",
+       fill = "Topic"
+     ) +
+     theme_minimal()
+ }
 
 ```
 #Model Training
