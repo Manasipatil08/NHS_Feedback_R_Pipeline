@@ -198,7 +198,7 @@ wordcloud(words = term_freq$word,
 #Removing stop words manually
 ```{r Removing Stop Words}
 cleaned_data <- cleaned_data %>%
-  filter(!word %in% c("ive", "im" ,"whats"))
+  filter(!word %in% c("ive", "im" ,"whats","theyve","wont"))
 
 clean_term_freq <- cleaned_data %>% #after removing stop words
   count(word, sort = TRUE)
@@ -514,7 +514,7 @@ document_topics <- tidy(lda_model, matrix = "gamma") # gamma = document-topic pr
 ```
 
 
-```{r Visualization for topic, warning=FALSE}
+```{r Topic Visualization}
 #Count feedback per topic
 # topic_counts <- feedback_with_topics %>%
 #   group_by(topic) %>%
