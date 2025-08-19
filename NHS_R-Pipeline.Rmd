@@ -40,17 +40,46 @@ library(dplyr)
 library(shiny)
 set.seed(123)
 ```
+```{r}
+# Read the CSV
+raw_feedback <- read_csv(file = here("data", "raw_feedback.csv"))
+
+# Check column names
+colnames(raw_feedback)
+
+# Frequency table
+table(raw_feedback$`Clinical Y/N`)
+
+# Plot with correct column reference
+ggplot(raw_feedback, aes(x = `Clinical Y/N`)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Clinical (Y/N) Feedback",
+       x = "Clinical Label",
+       y = "Count") +
+  theme_minimal(base_size = 14)
+```
 
 ```{r Load Data}
 
 feedback <- read_csv(file = here("data", "updated_feedback.csv"))
 ```
+
 ```{r Sample EDA}
 # Count missing values in Feedback
 sum(is.na(feedback$Feedback))
 
 # Count unique values in Feedback
 length(unique(feedback$Feedback))
+
+#To check Balanced lables
+table(feedback_cleaned$Clinical.Y.N)    #tells whether the data is balanced or not based on labels
+
+ggplot(feedback_cleaned, aes(x = Clinical.Y.N)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Clinical (Y/N) Feedback",
+       x = "Clinical Label",
+       y = "Count") +
+  theme_minimal(base_size = 14)
 
 # Summary of missing & unique together
 data.frame(
@@ -550,7 +579,7 @@ document_topics <- tidy(lda_model, matrix = "gamma") # gamma = document-topic pr
 topic_names <- data.frame(
   topic = 1:5,
   topic_name = c(
-    "Routine & GP Concerns",
+    "Routine & Concerns",
     "Pain & Symptom",
     "App & Technical Issues",
     "Frustrations & Pain",
@@ -580,7 +609,7 @@ topic_counts <- feedback_with_topics %>%
    geom_text(aes(label = count), hjust = -0.2, size = 5) +
    coord_flip() +
    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
-   labs(title = "Distribution of Topics in NHS Feedback (n = 350)",
+   labs(title = "Distribution of Topics in NHS Feedback (n=350)",
         x = "Topic", y = "Number of Feedbacks") +
    theme_minimal(base_size = 14)
 
@@ -645,23 +674,23 @@ text_recipe <- recipe(label ~ Feedback, data = train_data) %>%
   step_normalize(all_predictors())
 ```
 
-```{r Model Training}
+```{r # Define Models for Text Classification}
 # Naive Bayes
-nb_model <- naive_Bayes() %>%
+nb_model <- naive_Bayes() %>%    #Create Naive Bayes model specification
   set_engine("naivebayes")
 
 # Logistic Regression
-log_model <- multinom_reg(penalty = 0) %>%
+log_model <- multinom_reg(penalty = 0) %>%      # Multinomial logistic regression, no regularization
   set_engine("glmnet") %>%
   set_mode("classification")
 
 # Random Forest
-rf_model <- rand_forest(trees = 500) %>%
+rf_model <- rand_forest(trees = 500) %>%        # Random Forest with 500 trees
   set_engine("ranger") %>%
   set_mode("classification")
 
 # XGBoost
-xgb_model <- boost_tree(trees = 500, learn_rate = 0.05) %>%
+xgb_model <- boost_tree(trees = 500, learn_rate = 0.05) %>%  # XGBoost with 500 trees & learning rate 0.05
   set_engine("xgboost") %>%
   set_mode("classification")
 ```
@@ -674,6 +703,7 @@ xgb_wf <- workflow() %>% add_recipe(text_recipe) %>% add_model(xgb_model)
 ```
 
 ```{r Model Fit}
+#Trains the workflow (preprocessing + model) on training dataset.
 nb_fit  <- fit(nb_wf, data = train_data)
 log_fit <- fit(log_wf, data = train_data)
 rf_fit  <- fit(rf_wf, data = train_data)
@@ -686,16 +716,16 @@ xgb_fit <- fit(xgb_wf, data = train_data)
 #   preds <- predict(model_fit, test_data, type = "prob") %>%
 #     bind_cols(predict(model_fit, test_data)) %>%
 #     bind_cols(test_data %>% select(label))
-#   
+# 
 #   # Confusion matrix
 #   cm <- conf_mat(preds, truth = label, estimate = .pred_class)
 #   print(cm)
-#   
+# 
 #   # Metrics
 #   metrics <- preds %>%
 #     metrics(truth = label, estimate = .pred_class) %>%
 #     bind_rows(preds %>% f_meas(truth = label, estimate = .pred_class))
-#   
+# 
 #   list(preds = preds, metrics = metrics, cm = cm)
 # }
 # 
@@ -731,7 +761,6 @@ rf_res  <- get_metrics(rf_fit, test_data, "Random Forest")
 xgb_res <- get_metrics(xgb_fit, test_data, "XGBoost")
 
 ```
-
 ```{r Confusion Matrix Visualization}
 # Function for a blue-shaded confusion matrix with white text
 plot_confusion_matrix <- function(cm, title) {
@@ -996,7 +1025,7 @@ ui <- fluidPage(
       h4("How it Works"),
       p("Enter patient feedback and click Predict. The model will classify whether it requires clinical review."),
       h3("About the Model"),
-      p("This application uses a tuned XGBoost model trained on NHS patient feedback.")
+      p("This application uses a XGBoost model trained on NHS patient feedback.")
   )
 )
 
